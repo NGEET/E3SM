@@ -66,6 +66,7 @@ _TESTS = {
             "ERS_Ld20.f45_f45.IELMFATES.elm-fates",
             "ERS.f09_g16.IELMBC.elm-simple_decomp",
             "ERS.hcru_hcru.IELM.elm-multi_inst",
+            "SMS.ELM_USRDAT.GTSM2ELM.elm-lnd_docn_1way",
             )
         },
 
@@ -101,7 +102,8 @@ _TESTS = {
             "ERS.ELM_USRDAT.I1850ELM.elm-usrdat",
             "ERS.r05_r05.IELM.elm-lnd_rof_2way",
             "ERS.r05_r05.IELM.elm-V2_ELM_MOSART_features",
-            "ERS.ELM_USRDAT.IELM.elm-surface_water_dynamics"
+            "ERS.ELM_USRDAT.IELM.elm-surface_water_dynamics",
+            "ERS.ELM_USRDAT.IELM.elm-finetop_rad"
             )
         },
 
@@ -144,11 +146,11 @@ _TESTS = {
 
     "e3sm_landice_developer" : {
         "tests"   : (
-            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis20.IGELM_MLI.mali-gis20km",
-            "ERS.ne30pg2_r05_IcoswISC30E3r5_gis20.IGELM_MLI.mali-gis20km",
-            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis20.BGWCYCL1850.allactive-gis20km",
-            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis4to40.BGWCYCL1850.allactive-gis20km",
-            "SMS.ne30_oECv3_gis.IGELM_MLI.elm-extrasnowlayers",
+            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis4to40.IGELM_MLI.mali-landiceIG",
+            "ERS_Ld3.ne30pg2_r05_IcoswISC30E3r5_gis4to40.IGELM_MLI.mali-landiceIG",
+            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis4to40.BGWCYCL1850.allactive-landiceBG",
+            "ERS_Ld3.ne30pg2_r05_IcoswISC30E3r5_gis4to40.BGWCYCL1850.allactive-landiceBG",
+            "SMS.ne30pg2_r05_IcoswISC30E3r5_gis4to40.IGELM_MLI.elm-extrasnowlayers",
             "ERS_Ld5.TL319_oQU240wLI_gis4to40.MPAS_FOLISIO_JRA1p5.mpaso-jra_1958",
             "ERS_Ld5.TL319_oQU240wLI_ais8to30.MPAS_FOLISIO_JRA1p5.mpaso-jra_1958",
             )
@@ -346,7 +348,7 @@ _TESTS = {
             "NCK.ne4pg2_oQU480_rx1.A",
             "SMS.ne4pg2_oQU480_rx1.A",
             "ERS_Ld5.T62_oQU120.CMPASO-NYF",
-            "ERS.f09_g16_g.MALISIA",
+            "ERS.ne30pg2_r05_IcoswISC30E3r5_gis4to40.MALISIA",
             "ERS_Ld5.TL319_oQU240wLI_ais8to30.MPAS_LISIO_JRA1p5.mpaso-ocn_glcshelf",
             "SMS_P12x2.ne4pg2_oQU480.WCYCL1850NS.allactive-mach_mods",
             "ERS_Ln9.ne4pg2_ne4pg2.F2010-MMF1.eam-mmf_crmout",
@@ -433,6 +435,7 @@ _TESTS = {
             "SMS_Ld1.ne30pg2_r05_IcoswISC30E3r5.WCYCLSSP585.allactive-wcprodssp",
             "SMS_Ld1_P512.northamericax4v1pg2_r025_IcoswISC30E3r5.WCYCL1850.allactive-wcprodrrm_1850",
             "SMS_D_Ld1.ne30pg2_r05_IcoswISC30E3r5.CRYO1850",
+            "SMS_D_Ld1.ne30pg2_r05_IcoswISC30E3r5.CRYO1850-CMIP7",
             )
         },
 
@@ -716,6 +719,7 @@ _TESTS = {
         "time"  : "01:00:00",
         "inherit" : (
             "e3sm_eamxx_mam4xx_lowres",
+            "e3sm_eamxx_v1_dp-eamxx",
         ),
         "tests" : (
             "ERS_Ln9.ne4_ne4.F2000-SCREAMv1-AQP1.eamxx-output-preset-2--eamxx-L72",
@@ -739,21 +743,17 @@ _TESTS = {
         # each test runs with 225 dynamics and 100 physics columns, roughly size of ne2
         "tests" : (
             "ERS_P16_Ln22.ne30pg2_ne30pg2.FIOP-SCREAMv1-DP.eamxx-dpxx-dycomsrf01",
-            "ERS_P16_Ln22.ne30pg2_ne30pg2.FIOP-SCREAMv1-DP.eamxx-dpxx-arm97",
+            "ERS_P16x1_Ln22.ne30pg2_ne30pg2.FIOP-SCREAMv1-DP.eamxx-dpxx-arm97",
             "ERS_P16_Ln22.ne30pg2_ne30pg2.FIOP-SCREAMv1-DP.eamxx-dpxx-comble",
             "ERS_P16_Ln22.ne30pg2_ne30pg2.FRCE-SCREAMv1-DP",
             )
     },
 
-    # Tests run on exclusively on mappy for eamxx AT testing. These tests
-    # should be fast, so we limit it to low res and add some thread tests
-    # specifically for mappy.
-    "e3sm_eamxx_v1_at" : {
-        "inherit" : ("e3sm_eamxx_v1_lowres", "e3sm_eamxx_v1_dp-eamxx"),
-        "tests"   : ("PET_Ln9_P32x2.ne4pg2_ne4pg2.F2010-SCREAMv1.eamxx-output-preset-1")
-    },
-
     "e3sm_eamxx_v1_medres" : {
+        "inherit" : (
+            # DPxx is (very) lowres, but we only run medres nightly, so add it here
+            "e3sm_eamxx_v1_dp-eamxx",
+        ),
         "time"  : "02:00:00",
         "tests" : (
             #  "SMS_D_Ln2.ne30_ne30.F2000-SCREAMv1-AQP1", # Uncomment once IC file for ne30 is ready
@@ -798,6 +798,8 @@ _TESTS = {
         "inherit" : (
         ),
         "tests" : (
+            "RCS_C4.ne30pg2_ne30pg2.F2010-SCREAMv1.eamxx-perturb",  # 8 nodes, about 1.9 hours on pm-gpu
+            "RCS_C4.ne4pg2_ne4pg2.F2010-SCREAMv1.eamxx-perturb",    # 1 node, about 22min on pm-gpu
             "ERP_D_Lh182.ne4pg2_ne4pg2.F2010-SCREAMv1",
             "ERS_Ln362.ne30pg2_ne30pg2.F2010-SCREAMv1"
             )
@@ -820,6 +822,7 @@ _TESTS = {
             "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-wetscav--eamxx-L72",
             "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-drydep--eamxx-L72",
             "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-aero_microphysics--eamxx-L72",
+            "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-constituent_fluxes--eamxx-L72",
             "REP_Ln5.ne30pg2_oECv3.F2010-EAMxx-MAM4xx.eamxx-mam4xx-remap_emiss_ne4_ne30--eamxx-L72",
             "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-compute_mam4xx_diags--eamxx-L72",
             "REP_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-L72",
@@ -840,6 +843,7 @@ _TESTS = {
             "SMS_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-wetscav--eamxx-L72",
             "SMS_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-drydep--eamxx-L72",
             "SMS_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-aero_microphysics--eamxx-L72",
+            "SMS_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-mam4xx-constituent_fluxes--eamxx-L72",
             "SMS_D_Ln5.ne30pg2_oECv3.F2010-EAMxx-MAM4xx.eamxx-mam4xx-remap_emiss_ne4_ne30--eamxx-L72",
             "SMS_D_Ln5.ne4pg2_oQU480.F2010-EAMxx-MAM4xx.eamxx-L72"
         )
@@ -883,6 +887,11 @@ _TESTS = {
     },
 
     "e3sm_moab_dev" : {
+        "inherit" : ("e3sm_moab_ers",
+                     "e3sm_moab_pem"),
+    },
+
+    "e3sm_moab_ers" : {
         "time"  : "01:00:00",
         "tests" : (
             "ERS_Vmoab_Ld3.ne4pg2_r05_oQU480.WCYCL1850NS",
@@ -892,6 +901,7 @@ _TESTS = {
             "ERS_Vmoab_Ld3.ne4pg2_ne4pg2.I1850CNPRDCTCBCTOP",
             "ERS_Vmoab_Ld3.T62_oQU240wLI.GMPAS-IAF",
             "ERS_Vmoab_Ld3.T62_oQU120.CMPASO-NYF",
+            "ERS_Vmoab_Ld3.T62_oQU240.DTESTM",
             "ERS_Vmoab_Ld3.r05_r05.RMOSGPCC",
             "ERS_Vmoab_Ld3.ne4pg2_ne4pg2.F2010-SCREAMv1",
         )
@@ -907,6 +917,7 @@ _TESTS = {
             "PEM_Vmoab_Ld3.ne4pg2_ne4pg2.I1850CNPRDCTCBCTOP",
             "PEM_Vmoab_Ld3.T62_oQU240wLI.GMPAS-IAF",
             "PEM_Vmoab_Ld3.T62_oQU120.CMPASO-NYF",
+            "PEM_Vmoab_Ld3.T62_oQU240.DTESTM",
             "PEM_Vmoab_Ld3.r05_r05.RMOSGPCC",
             "PEM_Vmoab_Ld3.ne4pg2_ne4pg2.F2010-SCREAMv1",
         )

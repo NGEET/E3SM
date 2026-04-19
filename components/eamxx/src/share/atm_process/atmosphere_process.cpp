@@ -112,6 +112,11 @@ AtmosphereProcess (const ekat::Comm& comm, const ekat::ParameterList& params)
 #endif
 }
 
+void AtmosphereProcess::set_grids (const std::shared_ptr<const GridsManager> grids_manager) {
+  m_grids_manager = grids_manager;
+  create_requests();
+}
+
 void AtmosphereProcess::initialize (const TimeStamp& t0, const RunType run_type) {
   if (this->type()!=AtmosphereProcessType::Group) {
     start_timer (m_timer_prefix + this->name() + "::init");
@@ -179,8 +184,7 @@ void AtmosphereProcess::run (const double dt) {
     if (m_internal_diagnostics_level > 0)
       // Print hash of INPUTS before run
       print_global_state_hash(name() + "-pre-sc-" + std::to_string(m_subcycle_iter),
-                              m_start_of_step_ts,
-                              true, false, true);
+                              m_start_of_step_ts, true);
 
     // Run derived class implementation
     run_impl(dt_sub);
@@ -188,8 +192,7 @@ void AtmosphereProcess::run (const double dt) {
     if (m_internal_diagnostics_level > 0)
       // Print hash of OUTPUTS/INTERNALS after run
       print_global_state_hash(name() + "-pst-sc-" + std::to_string(m_subcycle_iter),
-                              m_end_of_step_ts,
-                              false, true, true);
+                              m_end_of_step_ts, false);
 
     if (has_energy_fixer()){
       const bool water_thermo_fixer = has_air_sea_surface_water_thermo_fixer();
@@ -545,6 +548,7 @@ void AtmosphereProcess::compute_step_tendencies () {
     // may be MUCH larger than the tend. Instead, compute step tend, and THEN add into tend
     f_beg.update(f_end,1,-1);
     tend.update(f_beg,1,1);
+    tend.get_header().get_tracking().update_time_stamp(m_end_of_step_ts);
   }
   stop_timer(m_timer_prefix + this->name() + "::compute_tendencies");
 }
@@ -553,11 +557,11 @@ bool AtmosphereProcess::has_required_field (const FieldIdentifier& id) const {
   return has_required_field(id.name(),id.get_grid_name());
 }
 
-bool AtmosphereProcess::has_required_field (const std::string& name, const std::string& grid_name) const {
-  for (const auto& it : m_required_field_requests) {
-    if (it.fid.name()==name && it.fid.get_grid_name()==grid_name) {
+bool AtmosphereProcess::has_required_field (const std::string& name, const std::string& grid_name) const
+{
+  for (const auto& r : m_field_requests) {
+    if (r.fid.name()==name and r.fid.get_grid_name()==grid_name and r.usage & Required)
       return true;
-    }
   }
   return false;
 }
@@ -566,29 +570,29 @@ bool AtmosphereProcess::has_computed_field (const FieldIdentifier& id) const {
   return has_computed_field(id.name(),id.get_grid_name());
 }
 
-bool AtmosphereProcess::has_computed_field (const std::string& name, const std::string& grid_name) const {
-  for (const auto& it : m_computed_field_requests) {
-    if (it.fid.name()==name && it.fid.get_grid_name()==grid_name) {
+bool AtmosphereProcess::has_computed_field (const std::string& name, const std::string& grid_name) const
+{
+  for (const auto& r : m_field_requests) {
+    if (r.fid.name()==name and r.fid.get_grid_name()==grid_name and r.usage & Computed)
       return true;
-    }
   }
   return false;
 }
 
-bool AtmosphereProcess::has_required_group (const std::string& name, const std::string& grid) const {
-  for (const auto& it : m_required_group_requests) {
-    if (it.name==name && it.grid==grid) {
+bool AtmosphereProcess::has_required_group (const std::string& name, const std::string& grid) const
+{
+  for (const auto& r : m_group_requests) {
+    if (r.name==name and r.grid==grid and r.usage & Required)
       return true;
-    }
   }
   return false;
 }
 
-bool AtmosphereProcess::has_computed_group (const std::string& name, const std::string& grid) const {
-  for (const auto& it : m_computed_group_requests) {
-    if (it.name==name && it.grid==grid) {
+bool AtmosphereProcess::has_computed_group (const std::string& name, const std::string& grid) const
+{
+  for (const auto& r : m_group_requests) {
+    if (r.name==name and r.grid==grid and r.usage & Computed)
       return true;
-    }
   }
   return false;
 }
@@ -622,14 +626,15 @@ void AtmosphereProcess::update_time_stamps () {
 }
 
 void AtmosphereProcess::add_me_as_provider (const Field& f) {
-  f.get_header_ptr()->get_tracking().add_provider(weak_from_this());
+  f.get_header_ptr()->get_tracking().add_provider(name());
 }
 
 void AtmosphereProcess::add_me_as_customer (const Field& f) {
-  f.get_header_ptr()->get_tracking().add_customer(weak_from_this());
+  f.get_header_ptr()->get_tracking().add_customer(name());
 }
 
-void AtmosphereProcess::add_internal_field (const Field& f, const std::vector<std::string>& groups) {
+void AtmosphereProcess::
+add_internal_field (const Field& f, const std::vector<std::string>& groups) {
   auto& fi = m_internal_fields.emplace_back(f);
   for (const auto& gn : groups) {
     fi.get_header().get_tracking().add_group(gn);

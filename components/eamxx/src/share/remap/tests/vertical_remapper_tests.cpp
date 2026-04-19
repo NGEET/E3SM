@@ -1,7 +1,6 @@
 #include <catch2/catch.hpp>
 
 #include "share/remap/vertical_remapper.hpp"
-#include "share/remap/coarsening_remapper.hpp"
 #include "share/grid/point_grid.hpp"
 #include "share/scorpio_interface/eamxx_scorpio_interface.hpp"
 #include "share/util/eamxx_timing.hpp"
@@ -26,7 +25,7 @@ void print (const std::string& fmt, const ekat::Comm& comm, Args&&... args) {
 // Overload for when there are no additional arguments
 void print(const std::string& fmt, const ekat::Comm& comm) {
   if (comm.am_i_root()) {
-    printf(fmt.c_str());
+    printf("%s",fmt.c_str());
   }
 }
 
@@ -558,8 +557,8 @@ TEST_CASE ("vertical_remapper") {
               // (summing x[i]*x[i] would overflow in SP, causing NaN's)
               auto mask = expected.get_header().get_extra_data<Field>("is_filled");
               expected.deep_copy(0,mask);
-              auto ex_norm = frobenius_norm<Real>(expected);
-              REQUIRE (frobenius_norm<Real>(diff)<tol*ex_norm);
+              auto ex_norm = frobenius_norm(expected).as<Real>();
+              REQUIRE (frobenius_norm(diff).as<Real>()<tol*ex_norm);
             };
 
             print (" -> check tgt fields ...\n",comm);

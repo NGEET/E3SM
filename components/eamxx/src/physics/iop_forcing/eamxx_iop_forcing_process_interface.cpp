@@ -9,11 +9,11 @@ namespace scream
 {
 // =========================================================================================
 void
-IOPForcing::set_grids(const std::shared_ptr<const GridsManager> grids_manager)
+IOPForcing::create_requests()
 {
   using namespace ekat::units;
 
-  m_grid                = grids_manager->get_grid("physics");
+  m_grid                = m_grids_manager->get_grid("physics");
   const auto &grid_name = m_grid->name();
 
   m_num_cols = m_grid->get_num_local_dofs();      // Number of columns on this rank
@@ -163,8 +163,8 @@ advance_iop_subsidence(const MemberType& team,
                        const view_1d<Pack>& T,
                        const view_2d<Pack>& Q)
 {
-  constexpr Real Rair = C::Rair;
-  constexpr Real Cpair = C::Cpair;
+  constexpr Real Rair = C::Rair.value;
+  constexpr Real Cpair = C::Cpair.value;
 
   const auto n_q_tracers = Q.extent_int(0);
   const auto nlev_packs = ekat::npack<Pack>(nlevs);
@@ -321,7 +321,7 @@ iop_apply_coriolis(const MemberType& team,
                    const view_1d<Pack>& v)
 {
   constexpr Real pi = C::Pi;
-  constexpr Real earth_rotation = C::omega;
+  constexpr Real earth_rotation = C::omega.value;
 
   // Compute coriolis force
   const auto fcor = 2*earth_rotation*std::sin(lat*pi/180);
@@ -343,7 +343,7 @@ void IOPForcing::run_impl (const double dt)
   const auto nlev_packs  = ekat::npack<Pack>(m_num_levs);
 
   // Hybrid coord values
-  const auto ps0 = C::P0;
+  const Real ps0 = C::P0.value;
   const auto hyam = m_grid->get_geometry_data("hyam").get_view<const Real*>();
   const auto hybm = m_grid->get_geometry_data("hybm").get_view<const Real*>();
   const auto hyai = m_grid->get_geometry_data("hyai").get_view<const Real*>();
@@ -461,17 +461,17 @@ void IOPForcing::run_impl (const double dt)
     view_1d<Pack> qv_mean, t_mean;
     view_2d<Pack> horiz_winds_mean;
     if (iop_nudge_tq){
-      horiz_contraction<Real>(m_helper_fields.at("qv_mean"), get_field_out("qv"),
-                              m_helper_fields.at("horiz_mean_weights"), &m_comm);
+      horiz_contraction(m_helper_fields.at("qv_mean"), get_field_out("qv"),
+                        m_helper_fields.at("horiz_mean_weights"), true, &m_comm);
       qv_mean = m_helper_fields.at("qv_mean").get_view<Pack*>();
 
-      horiz_contraction<Real>(m_helper_fields.at("t_mean"), get_field_out("T_mid"),
-                              m_helper_fields.at("horiz_mean_weights"), &m_comm);
+      horiz_contraction(m_helper_fields.at("t_mean"), get_field_out("T_mid"),
+                        m_helper_fields.at("horiz_mean_weights"), true, &m_comm);
       t_mean = m_helper_fields.at("t_mean").get_view<Pack*>();
     }
     if (iop_nudge_uv){
-      horiz_contraction<Real>(m_helper_fields.at("horiz_winds_mean"), get_field_out("horiz_winds"),
-                              m_helper_fields.at("horiz_mean_weights"), &m_comm);
+      horiz_contraction(m_helper_fields.at("horiz_winds_mean"), get_field_out("horiz_winds"),
+                        m_helper_fields.at("horiz_mean_weights"), true, &m_comm);
       horiz_winds_mean = m_helper_fields.at("horiz_winds_mean").get_view<Pack**>();
     }
 

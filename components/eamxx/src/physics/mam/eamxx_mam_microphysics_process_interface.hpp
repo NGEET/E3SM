@@ -9,8 +9,9 @@
 #include <mam4xx/mam4.hpp>
 #include <string>
 
-namespace scream {
 
+namespace scream {
+class DataInterpolation;
 // The process responsible for handling MAM4 aerosol microphysics. The AD
 // stores exactly ONE instance of this class in its list of subcomponents.
 class MAMMicrophysics final : public MAMGenericInterface {
@@ -42,8 +43,7 @@ class MAMMicrophysics final : public MAMGenericInterface {
   std::string name() const { return "mam_aero_microphysics"; }
 
   // grid
-  void set_grids(
-      const std::shared_ptr<const GridsManager> grids_manager) override;
+  void create_requests() override;
 
   // management of common atm process memory
   size_t requested_buffer_size_in_bytes() const override;
@@ -76,6 +76,11 @@ class MAMMicrophysics final : public MAMGenericInterface {
   double m_orbital_mvelp;  // Vernal Equinox Mean Longitude of Perihelion
 
   struct Config {
+    // Number of so4(+nh4) monolayers needed to "age" a carbon particle.
+    // In E3SM this is read in from an input file and is 8 by default.
+    // From input parameter mam4_number_so4_monolayers_to_age_carbon_particle
+    unsigned n_so4_monolayers_pcage = 8;
+
     // stratospheric chemistry parameters
     mam4::microphysics::LinozConf linoz;
 
@@ -98,36 +103,31 @@ class MAMMicrophysics final : public MAMGenericInterface {
   // surface albedo: shortwave, direct
   const_view_1d d_sfc_alb_dir_vis_;
 
-  mam_coupling::TracerTimeState linoz_time_state_;
+
   view_2d work_photo_table_;
   std::vector<Real> chlorine_values_;
   std::vector<int> chlorine_time_secs_;
   view_3d photo_rates_;
+  // names of oxi variants
+  std::vector<std::string> var_names_oxi_;
+  // names of linoz field
+  std::vector<std::string> var_names_linoz_;
 
-  // invariants members
-  mam_coupling::TracerTimeState trace_time_state_;
-  std::shared_ptr<AtmosphereInput> TracerDataReader_;
-  std::shared_ptr<AbstractRemapper> TracerHorizInterp_;
-  mam_coupling::TracerData tracer_data_;
+  // data interpolation object for oxi invariants
+  std::shared_ptr<DataInterpolation>    data_interp_oxid_;
+  void set_oxid_reader();
+  // data interpolation object for linoz fields
+  std::shared_ptr<DataInterpolation>    data_interp_linoz_;
+  void set_linoz_reader();
   view_3d invariants_;
-  std::string oxid_file_name_;
-  view_2d cnst_offline_[4];
-
-  // linoz reader
-  std::shared_ptr<AtmosphereInput> LinozDataReader_;
-  std::shared_ptr<AbstractRemapper> LinozHorizInterp_;
-  mam_coupling::TracerData linoz_data_;
-  std::string linoz_file_name_;
-
   // Vertical emission uses 9 files, here I am using std::vector to stote
   // instance of each file.
-  mam_coupling::TracerTimeState elevated_emiss_time_state_[mam4::gas_chemistry::extcnt];
-  std::vector<std::shared_ptr<AtmosphereInput>> ElevatedEmissionsDataReader_;
-  std::vector<std::shared_ptr<AbstractRemapper>> ElevatedEmissionsHorizInterp_;
-  std::vector<std::string> extfrc_lst_;
-  std::vector<mam_coupling::TracerData> elevated_emis_data_;
-  std::map<std::string, std::string> elevated_emis_file_name_;
   std::map<std::string, std::vector<std::string>> elevated_emis_var_names_;
+  // data interpolation object for elevated emissions
+  std::vector<std::shared_ptr<DataInterpolation>> data_interp_elevated_emissions_;
+  void set_elevated_emissions_reader();
+  std::vector<std::string> extfrc_lst_;
+
   view_3d extfrc_;
   mam_coupling::ForcingHelper forcings_[mam4::gas_chemistry::extcnt];
 

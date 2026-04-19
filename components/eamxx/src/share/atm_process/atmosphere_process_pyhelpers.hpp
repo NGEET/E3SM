@@ -16,14 +16,22 @@ void AtmosphereProcess::
 py_module_call (const std::string& name, const Args&... args)
 {
   const auto& py_module = std::any_cast<const pybind11::module&>(m_py_module);
-  py_module.attr(name.c_str())(args...);
+  try {
+    py_module.attr(name.c_str())(args...);
+  } catch (const pybind11::error_already_set& e) {
+    std::cout << "[" << this->name() << "] Error! Something went wrong while calling a python module function.\n"
+                 " - module name: " + m_params.get<std::string>("py_module_name") + "\n"
+                 " - function name: " + name + "\n"
+                 " - pybind11 error: " + std::string(e.what()) + "\n";
+    throw e;
+  }
 }
 
 inline const pybind11::array& AtmosphereProcess::
 get_py_field_impl (const strmap_t<strmap_t<std::any>>& py_fields,
                    const std::string& fname, const std::string& grid) const
 {
-  auto any_f = py_fields.at(fname).at(grid);
+  auto& any_f = py_fields.at(fname).at(grid);
   return std::any_cast<const pybind11::array&>(any_f);
 }
 

@@ -76,6 +76,8 @@ module ELMFatesInterfaceMod
    use elm_varctl        , only : fates_history_dimlevel
    use elm_varctl        , only : use_lch4
    use elm_varctl        , only : use_century_decomp
+   use elm_varctl        , only : carbon_only,carbonnitrogen_only,carbonphosphorus_only
+   use elm_varctl        , only : fates_paramfile
    use elm_varcon        , only : tfrz
    use elm_varcon        , only : spval
    use elm_varcon        , only : denice
@@ -154,7 +156,6 @@ module ELMFatesInterfaceMod
    use FatesInterfaceTypesMod,   only : hlm_num_luh2_states
    use FatesIOVariableKindMod, only : group_dyna_simple, group_dyna_complx
    use PRTGenericMod         , only : num_elements
-   use FatesPatchMod         , only : fates_patch_type
    use FatesDispersalMod     , only : lneighbors, dispersal_type, IsItDispersalTime
    use FatesInterfaceTypesMod, only : hlm_stepsize, hlm_current_day
    use EDMainMod             , only : ed_ecosystem_dynamics
@@ -206,9 +207,6 @@ module ELMFatesInterfaceMod
 
    use FatesInterfaceTypesMod       , only : bc_in_type, bc_out_type
 
-   use ELMFatesParamInterfaceMod, only : fates_param_reader_ctsm_impl
-   use FatesParametersInterface, only : fates_param_reader_type
-   use FatesParametersInterface, only : fates_parameters_type
    
    use perf_mod          , only : t_startf, t_stopf
 
@@ -221,16 +219,15 @@ module ELMFatesInterfaceMod
 
    type, public :: f2hmap_type
 
-      ! This is the associated column index of each FATES site
+      ! This is the associated column index of each FATES site - to be deprecated
       integer, allocatable :: fcolumn (:)
 
-      ! This is the associated site index of any HLM columns
+      ! This is the associated site index of any HLM columns - to be deprecated
       ! This vector may be sparse, and non-sites have index 0
       integer, allocatable :: hsites  (:)
 
    end type f2hmap_type
-
-
+   
    type, public :: hlm_fates_interface_type
 
       ! See above for descriptions of the sub-types populated
@@ -278,6 +275,8 @@ module ELMFatesInterfaceMod
       procedure, public :: Init2  ! Initialization after determining subgrid weights
       procedure, public :: InitAccBuffer ! Initialize any accumulation buffers
       procedure, public :: InitAccVars   ! Initialize any accumulation variables
+      procedure, public :: RegisterInterfaceVariablesInit
+      procedure, public :: RegisterInterfaceVariablesColdStart
       procedure, public :: UpdateAccVars ! Update any accumulation variables
       procedure, public :: UpdateLitterFluxes
       procedure, private :: init_history_io
@@ -330,7 +329,7 @@ contains
     integer                                        :: pass_use_luh2
     integer                                        :: pass_masterproc
     logical                                        :: verbose_output
-    type(fates_param_reader_ctsm_impl)             :: var_reader
+
 
     if (use_fates) then
 
@@ -377,6 +376,8 @@ contains
        end if
        call set_fates_ctrlparms('masterproc',ival=pass_masterproc)
 
+       call set_fates_ctrlparms('parteh_mode',ival=fates_parteh_mode)
+       
     end if
 
     ! The following call reads in the parameter file
@@ -393,8 +394,8 @@ contains
     ! want fates to handle crops, so again, it should be ignored.
     ! (RGK 07-2022)
     
-    call SetFatesGlobalElements1(use_fates,natpft_size,0,var_reader)
-
+    call SetFatesGlobalElements1(use_fates,natpft_size,0,fates_paramfile)
+    
     natpft_size = fates_maxPatchesPerSite
     max_patch_per_col= max(natpft_size, numcft, maxpatch_urb)
 
@@ -475,7 +476,6 @@ contains
         call set_fates_ctrlparms('hlm_name',cval='ELM')
         call set_fates_ctrlparms('hio_ignore_val',rval=spval)
         call set_fates_ctrlparms('soilwater_ipedof',ival=get_ipedof(0))
-        call set_fates_ctrlparms('parteh_mode',ival=fates_parteh_mode)
         call set_fates_ctrlparms('seeddisp_cadence',ival=fates_seeddisp_cadence)
 
         call set_fates_ctrlparms('hist_hifrq_dimlevel',ival=fates_history_dimlevel(1))
@@ -501,17 +501,6 @@ contains
            call set_fates_ctrlparms('decomp_method',cval='CTC')
         end if
 
-        ! ELM ALWAYS has nitrogen and phosphorus "on"
-        ! These may be in a non-limiting status (ie when supplements)
-        ! are added, but they are always allocated and cycled non-the less
-        ! FATES may want to interact differently with other models
-        ! that don't even have these arrays allocated.
-        ! FATES also checks that if NO3 is cycled in ELM, then
-        ! any plant affinity parameters are checked.
-
-        call set_fates_ctrlparms('nitrogen_spec',ival=1)
-        call set_fates_ctrlparms('phosphorus_spec',ival=1)
-        
         if(is_restart() .or. nsrest == nsrBranch) then
            pass_is_restart = 1
         else
@@ -852,12 +841,12 @@ contains
 
       use spmdMod,                  only : npes
       use decompMod,                only : procinfo
-      use FatesInterfaceMod,        only : FatesReportParameters
       use FatesParameterDerivedMod, only : param_derived
       use FatesInterfaceTypesMod,   only : numpft_fates => numpft
       use elm_varsur,               only : wt_nat_patch
       use topounit_varcon,          only : max_topounits, has_topounit
       use FATESFireFactoryMod,      only : create_fates_fire_data_method
+      use FatesConstantsMod,        only : fates_unset_int
 
       implicit none
 
@@ -876,12 +865,21 @@ contains
       integer                                        :: g         ! HLM grid index
       integer                                        :: m         ! HLM PFT index
       integer                                        :: ft        ! FATES PFT index
+      integer                                        :: i         ! iterator
       integer                                        :: pi,pf
+      integer                                        :: p         ! patch index
       integer, allocatable                           :: collist (:)
+      integer, allocatable                           :: patchlist(:)
       type(bounds_type)                              :: bounds_clump
       integer                                        :: nmaxcol
       integer                                        :: ndecomp
       integer                                        :: numg
+      integer                                        :: num_landunits_veg
+      integer                                        :: num_veg_patches
+      integer                                        :: nsites
+      integer                                        :: gridcell_index
+      integer                                        :: c1, c2
+      integer                                        :: nmaxpatches
 
       real(r8), allocatable :: landuse_pft_map(:,:,:)
       real(r8), allocatable :: landuse_bareground(:)
@@ -903,6 +901,7 @@ contains
          call DetermineGridCellNeighbors(lneighbors,this%fates_seed,numg)
       end if
 
+      ! Allocate fates interface and fates to HLM interfac vectors
       nclumps = get_proc_clumps()
       allocate(this%fates(nclumps))
       allocate(this%f2hmap(nclumps))
@@ -910,6 +909,9 @@ contains
       if(debug)then
          write(iulog,*) 'alm_fates%init():  allocating for ',nclumps,' threads'
       end if
+      
+      ! Initialize the fates to host land model API variable mapping
+      ! call this%InitAndSetAPIAssociation()
 
       ! Retrieve the landuse x pft static data if the optional switch has been set
       if (use_fates_fixed_biogeog .and. use_fates_luh) then
@@ -932,33 +934,29 @@ contains
          ! Initialize all columns with a zero index, which indicates no FATES site
          this%f2hmap(nc)%hsites(:) = 0
 
+         ! Determine the number of FATES site based of the clumping
+         ! This assumes one site per landunit currently.
          s = 0
+         num_landunits_veg = 0
          do c = bounds_clump%begc,bounds_clump%endc
             l = col_pp%landunit(c)
 
-            ! These are the key constraints that determine if this column
-            ! will have a FATES site associated with it
-
-            ! INTERF-TODO: WE HAVE NOT FILTERED OUT FATES SITES ON INACTIVE COLUMNS.. YET
-            ! NEED A RUN-TIME ROUTINE THAT CLEARS AND REWRITES THE SITE LIST
-
+               ! To be deprecated/refactored
             if ( (lun_pp%itype(l) == istsoil) .and. (col_pp%active(c)) ) then
                s = s + 1
                collist(s) = c
                this%f2hmap(nc)%hsites(c) = s
-               col_pp%is_fates(c) = .true.
+               col_pp%is_fates(c) = .true. 
 
                if(debug)then
                   write(iulog,*) 'alm_fates%init(): thread',nc,': found column',c,'with lu',l
                   write(iulog,*) 'LU type:', lun_pp%itype(l)
                end if
             endif
-
          enddo
-
-         if(debug)then
-           write(iulog,*) 'alm_fates%init(): thread',nc,': allocated ',s,' sites'
-         end if
+         
+         ! TODO Add adjustment to fates calculation here based on multi-column FATES options
+         ! s = num_landunits_veg
 
          ! Allocate vectors that match FATES sites with HLM columns
          ! RGK: Sites and fcolumns are forced as args during clm_driv() as of 6/4/2016
@@ -973,11 +971,54 @@ contains
          ! Deallocate the temporary arrays
          deallocate(collist)
 
-         ! Set the number of FATES sites
-         this%fates(nc)%nsites = s
+         if(debug)then
+           write(iulog,*) 'alm_fates%init(): thread',nc,': allocated ',s,' sites'
+         end if
 
-         ! Allocate the FATES sites
-         allocate (this%fates(nc)%sites(this%fates(nc)%nsites))
+         ! Iterate over all patches in this clump and determine the maximum number of non-crop
+         ! vegetated patches.  These correspond to the fates patches.
+         num_veg_patches = 0
+         nmaxpatches = bounds_clump%endp - bounds_clump%begp + 1
+         allocate(patchlist(nmaxpatches))
+         patchlist(:) = fates_unset_int
+
+         do p = bounds_clump%begp, bounds_clump%endp
+            c = veg_pp%column(p)
+            g = veg_pp%gridcell(p)
+            
+            ! If the column is a soil type, then the patch associated with it a vegetated patch, per initGridCells()
+            ! We don't use lun_pp%itype == istsoil here as crops can live on landunits with this type
+            ! Record the patch index to the temporary patchlist
+            if ( (col_pp%itype(c) == istsoil) .and. (col_pp%active(c)) ) then
+               
+               num_veg_patches = num_veg_patches + 1
+               patchlist(num_veg_patches) = p
+               
+            end if
+
+         end do
+         
+         ! Initialize interface registries for each patch on the clump 
+         call this%fates(nc)%InitializeInterfaceRegistry(num_veg_patches, patchlist)
+         
+         ! deallocate temporary patch list
+         deallocate(patchlist)
+         
+         ! Register the HLM interface variables that we be used to populate the FATES boundary conditions
+         call this%RegisterInterfaceVariablesInit(nc)
+         
+         ! Initialize the FATES sites
+         call this%fates(nc)%InitializeFatesSites(natpft_size)
+         
+         do p = 1, num_veg_patches
+            s = this%fates(nc)%registry(p)%GetSiteIndex()
+            c1 = this%f2hmap(nc)%fcolumn(s)
+            c2 = this%fates(nc)%registry(p)%GetColumnIndex()
+            if (c1 /= c2 ) then
+               write(iulog,*) ' columns do not match: p, s, c1, c2: ', p, s, c1, c2
+               call endrun(msg=errMsg(sourcefile, __LINE__))
+            end if
+         end do
 
          ! Allocate the FATES boundary arrays (in)
          allocate(this%fates(nc)%bc_in(this%fates(nc)%nsites))
@@ -988,6 +1029,9 @@ contains
          ! Allocate and Initialize the Boundary Condition Arrays
          ! These are staticaly allocated at maximums, so
          ! No information about the patch or cohort structure is needed at this step
+
+         ! Initialize fates boundary conditions arrays
+         call this%fates(nc)%InitializeBoundaryConditions(natpft_size)
 
          ! Parameter Constants defined by FATES, but used in ELM
          ! Note that FATES has its parameters defined, so we can also set the values
@@ -1006,13 +1050,13 @@ contains
             else
                ndecomp = 1
             end if
-
+            
             call allocate_bcin(this%fates(nc)%bc_in(s), col_pp%nlevbed(c), ndecomp, &
                                num_harvest_vars, num_landuse_state_vars, num_landuse_transition_vars, &
                                surfpft_lb, surfpft_ub)
             call allocate_bcout(this%fates(nc)%bc_out(s),col_pp%nlevbed(c),ndecomp)
             call zero_bcs(this%fates(nc),s)
-
+            
             ! Pass any grid-cell derived attributes to the site
             ! ---------------------------------------------------------------------------
 
@@ -1089,9 +1133,6 @@ contains
 
       call this%init_history_io(bounds_proc)
 
-      ! Report Fates Parameters (debug flag in lower level routines)
-      call FatesReportParameters(masterproc)
-      
       ! Fire data to send to FATES
       call create_fates_fire_data_method( this%fates_fire_data_method )
 
@@ -1176,7 +1217,7 @@ contains
       integer  :: nlevsoil                 ! number of soil layers at the site
       integer  :: ier                      ! allocate status code
       real(r8) :: s_node, smp_node         ! local for relative water content and potential
-      
+      logical  :: nitr_suppl,phos_suppl    ! Is ELM currently supplementing N or P?
       real(r8), pointer :: lnfm24(:)       ! 24-hour averaged lightning data
       real(r8), pointer :: gdp_lf_col(:)          ! gdp data
 
@@ -1204,6 +1245,9 @@ contains
       ! Set the FATES global time and date variables
       call GetAndSetTime
       
+      ! Update boundary conditions that change on a daily basis
+      call this%fates(nc)%UpdateInterfaceVariables()
+      
       if (fates_spitfire_mode > scalar_lightning) then
          allocate(lnfm24(bounds_clump%begg:bounds_clump%endg), stat=ier)
          if (ier /= 0) then
@@ -1221,7 +1265,7 @@ contains
          endif
          gdp_lf_col = this%fates_fire_data_method%GetGDP()
       end if
-
+      
       do s=1,this%fates(nc)%nsites
 
          c = this%f2hmap(nc)%fcolumn(s)
@@ -1246,11 +1290,7 @@ contains
          end if
 
          nlevsoil = this%fates(nc)%bc_in(s)%nlevsoil
-
-         ! Decomposition fluxes
-         this%fates(nc)%bc_in(s)%w_scalar_sisl(1:nlevsoil) = col_cf%w_scalar(c,1:nlevsoil)
-         this%fates(nc)%bc_in(s)%t_scalar_sisl(1:nlevsoil) = col_cf%t_scalar(c,1:nlevsoil)
-
+         
          ! Soil water
          this%fates(nc)%bc_in(s)%h2o_liqvol_sl(1:nlevsoil)  = &
                col_ws%h2osoi_vol(c,1:nlevsoil)
@@ -1341,8 +1381,26 @@ contains
 
       ! Nutrient uptake fluxes have been accumulating with each short
       ! timestep, here, we unload them from the boundary condition
-      ! structures into the cohort structures.
-      call UnPackNutrientAquisitionBCs(this%fates(nc)%sites, this%fates(nc)%bc_in)
+      ! structures into the cohort structures.  We also tell
+      ! fates the current supplementation status (used for dynamic rooting)
+
+      if(carbon_only)then
+         nitr_suppl = .true.
+         phos_suppl = .true.
+      else
+         if(carbonnitrogen_only)then
+            phos_suppl = .true.
+         else
+            phos_suppl = .false.
+         end if
+         if(carbonphosphorus_only)then
+            nitr_suppl = .true.
+         else
+            nitr_suppl = .false.
+         end if
+      end if
+      
+      call UnPackNutrientAquisitionBCs(this%fates(nc)%sites, this%fates(nc)%bc_in, nitr_suppl, phos_suppl)
       
       ! Distribute any seeds from neighboring gridcells into the current gridcell
       ! Global seed availability array populated by WrapGlobalSeedDispersal call
@@ -1434,76 +1492,44 @@ contains
       nc = bounds_clump%clump_index
 
       do s = 1, this%fates(nc)%nsites
-         c = this%f2hmap(nc)%fcolumn(s)
-
-         call FluxIntoLitterPools(this%fates(nc)%sites(s), &
-                                  this%fates(nc)%bc_in(s), &
-                                  this%fates(nc)%bc_out(s))
-         
-         col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_met_lit) = &
-              col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_met_lit) + &
-              this%fates(nc)%bc_out(s)%litt_flux_lab_c_si(1:nlevdecomp) * dtime
-         col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_cel_lit) = &
-              col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_cel_lit) + &
-              this%fates(nc)%bc_out(s)%litt_flux_cel_c_si(1:nlevdecomp)* dtime
-         col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_lig_lit) = &
-              col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_lig_lit) + &
-              this%fates(nc)%bc_out(s)%litt_flux_lig_c_si(1:nlevdecomp) * dtime
-
-         col_cf%litfall(c) = &
-               sum(this%fates(nc)%bc_out(s)%litt_flux_lab_c_si(1:nlevdecomp) * this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-               sum(this%fates(nc)%bc_out(s)%litt_flux_cel_c_si(1:nlevdecomp) * this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-               sum(this%fates(nc)%bc_out(s)%litt_flux_lig_c_si(1:nlevdecomp) * this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp))
-
-
-         ! Since N and P are always allocated in ELM, AND, since on the FATES
-         ! side we have prepped these arrays, which may be zero fluxes in the case of
-         ! prescribed FATES nutrient mode, we can send the fluxes into the source pools
-
-         select case(fates_parteh_mode)
-         case (prt_cnp_flex_allom_hyp )
-
-            col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_met_lit) = &
-                 col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_met_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_lab_p_si(1:nlevdecomp) * dtime
-
-            col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_cel_lit) = &
-                 col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_cel_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_cel_p_si(1:nlevdecomp)* dtime
-
-            col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_lig_lit) = &
-                 col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_lig_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_lig_p_si(1:nlevdecomp) * dtime
-
-            ! Diagnostic for mass balancing (gP/m2/s)
-            col_pf%plant_to_litter_pflux(c) = &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_lab_p_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_cel_p_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_lig_p_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp))
-
-            ! Transfer Nitrogen
-            col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_met_lit) = &
-                 col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_met_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_lab_n_si(1:nlevdecomp) * dtime
-
-            col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_cel_lit) = &
-                 col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_cel_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_cel_n_si(1:nlevdecomp)* dtime
-
-            col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_lig_lit) = &
-                 col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_lig_lit) + &
-                 this%fates(nc)%bc_out(s)%litt_flux_lig_n_si(1:nlevdecomp) * dtime
-
-            ! Diagnostic for mass balancing  (gN/m2/s)
-            col_nf%plant_to_litter_nflux(c) = &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_lab_n_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_cel_n_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp)) + &
-                 sum(this%fates(nc)%bc_out(s)%litt_flux_lig_n_si(1:nlevdecomp)*this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp))
-
-         end select
-
+         call FluxIntoLitterPools(this%fates(nc)%sites(s))
       end do
+      
+      ! Accumulate the litter fluxes at the column level
+      call this%fates(nc)%UpdateLitterFluxes(dtime)
 
+      ! Scale the decomposition pools post accumulation at the column level
+      do c = bounds_clump%begc,bounds_clump%endc
+
+         if (col_pp%is_fates(c)) then
+
+            col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_met_lit) =  &
+                 col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_met_lit) * dtime
+            col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_cel_lit) =  &
+                 col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_cel_lit) * dtime
+            col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_lig_lit) =  &
+                 col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_lig_lit) * dtime
+      
+            select case(fates_parteh_mode)
+            case (prt_cnp_flex_allom_hyp )
+
+               col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_met_lit) =  &
+                    col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_met_lit) * dtime
+               col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_cel_lit) =  &
+                    col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_cel_lit) * dtime
+               col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_lig_lit) =  &
+                    col_pf%decomp_ppools_sourcesink(c,1:nlevdecomp,i_lig_lit) * dtime
+
+               col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_met_lit) =  &
+                    col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_met_lit) * dtime
+               col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_cel_lit) =  &
+                    col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_cel_lit) * dtime
+               col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_lig_lit) =  &
+                    col_nf%decomp_npools_sourcesink(c,1:nlevdecomp,i_lig_lit) * dtime
+            end select
+
+         end if
+      end do
    end subroutine UpdateLitterFluxes
 
    !--------------------------------------------------------------------------------------
@@ -1570,8 +1596,7 @@ contains
 
        ! Canopy diagnostics for FATES
        call canopy_summarization(this%fates(nc)%nsites, &
-            this%fates(nc)%sites,  &
-            this%fates(nc)%bc_in)
+            this%fates(nc)%sites)
 
        ! Canopy diagnostic outputs for HLM, including LUC
        call update_hlm_dynamics(this%fates(nc)%nsites, &
@@ -1952,6 +1977,12 @@ contains
                     this%fates(nc)%sites )
 
 
+               ! Register interface variables handled normally during cold start
+               call this%RegisterInterfaceVariablesColdStart(nc, canopystate_inst)
+
+               ! Update the interface variables
+               call this%fates(nc)%UpdateInterfaceVariables(restarting=.true.)
+
 
                ! I think ed_update_site and update_hlmfates_dyn are doing some similar
                ! update type stuff, should consolidate (rgk 11-2016)
@@ -1973,6 +2004,12 @@ contains
                         this%fates(nc)%bc_out(s), &
                         is_restarting = .true.)
 
+                  ! This call sends internal fates variables into the
+                  ! output boundary condition structures. Note: this is called
+                  ! internally in fates dynamics as well.
+
+                  call FluxIntoLitterPools(this%fates(nc)%sites(s))
+                       
                end do
 
                if(use_fates_sp)then
@@ -2112,10 +2149,16 @@ contains
 
         if ( this%fates(nc)%nsites>0 ) then
 
+           ! Register interface variables
+           call this%RegisterInterfaceVariablesColdStart(nc, canopystate_inst)
+
+           ! Update the interface variables
+           call this%fates(nc)%UpdateInterfaceVariables(initialize=.true.)
+
            call get_clump_bounds(nc, bounds_clump)
 
            do s = 1,this%fates(nc)%nsites
-              call init_site_vars(this%fates(nc)%sites(s),this%fates(nc)%bc_in(s),this%fates(nc)%bc_out(s) )
+              call init_site_vars(this%fates(nc)%sites(s),this%fates(nc)%bc_in(s) )
               call zero_site(this%fates(nc)%sites(s))
            end do
 
@@ -2208,6 +2251,9 @@ contains
            call init_patches(this%fates(nc)%nsites, this%fates(nc)%sites, &
                              this%fates(nc)%bc_in)
 
+                             
+         !   ! Initialize FATES patch api registries 
+         !   call this%RegisterFatesInterfaceVariables(nc)
 
            do s = 1,this%fates(nc)%nsites
 
@@ -2219,6 +2265,12 @@ contains
                    this%fates(nc)%bc_in(s), &
                    this%fates(nc)%bc_out(s), &
                    is_restarting = .false.)
+
+              ! This call sends internal fates variables into the
+              ! output boundary condition structures. Note: this is called
+              ! internally in fates dynamics as well.
+
+              call FluxIntoLitterPools(this%fates(nc)%sites(s))
 
            end do
 
@@ -2290,9 +2342,6 @@ contains
                                               ! this is the order increment of patch
                                               ! on the site
       integer  :: nc                          ! clump index
-
-      type(fates_patch_type), pointer :: cpatch  ! c"urrent" patch  INTERF-TODO: SHOULD
-                                              ! BE HIDDEN AS A FATES PRIVATE
 
       associate( forc_solad => top_af_inst%solad, &
                  forc_solai => top_af_inst%solai, &
@@ -2722,7 +2771,6 @@ contains
     call  AccumulateFluxes_ED(this%fates(nc)%nsites,  &
                                this%fates(nc)%sites, &
                                this%fates(nc)%bc_in,  &
-                               this%fates(nc)%bc_out, &
                                dtime)
     return
  end subroutine wrap_accumulatefluxes
@@ -3483,7 +3531,7 @@ end subroutine wrap_update_hifrq_hist
        this%fates(nc)%bc_in(s)%z_sisl(1:nlevsoil)     = col_pp%z(c,1:nlevsoil)
        this%fates(nc)%bc_in(s)%dz_decomp_sisl(1:nlevdecomp) = &
             dzsoi_decomp(1:nlevdecomp)
-
+            
        if (use_vertsoilc) then
           do j=1,nlevsoil
              this%fates(nc)%bc_in(s)%decomp_id(j) = j
@@ -3963,5 +4011,166 @@ end subroutine wrap_update_hifrq_hist
    call ncd_pio_closefile(ncid)
 
  end subroutine GetLandusePFTData
+
+! ======================================================================================
+ 
+ subroutine RegisterInterfaceVariablesInit(this, nc)
+   
+   use FatesInterfaceParametersMod
+
+   use elm_varpar,  only : i_met_lit
+   use elm_varpar,  only : i_cel_lit
+   use elm_varpar,  only : i_lig_lit
+
+   ! Arguments
+   class(hlm_fates_interface_type), intent(inout) :: this
+   integer, intent(in)                            :: nc              ! clump number
+
+   ! Locals
+   integer :: r               ! Register index
+   integer :: p               ! HLM patch index
+   integer :: c               ! Column index
+   logical :: is_bareground   ! Is this register associated with a bareground patch
+   logical :: is_first        ! Is this register associated with the first patch on the column, landunit, etc
+                              ! This is necessary to ensure that accumulation variables are zero'd properly
+   
+   ! Iterate over the number of vegetated patches
+   do r = 1, this%fates(nc)%npatches
+      p = this%fates(nc)%registry(r)%GetHLMPatchIndex()
+      
+      ! Determine if the HLM patch is the initial (i.e. bareground patch) on the column
+      is_bareground = .false.
+      if (col_pp%pfti(veg_pp%column(p)) == p) then
+         is_bareground = .true.
+      end if
+      
+      ! Get the subgrid indices and assign them to the register metadata
+      call this%fates(nc)%registry(r)%SetSubgridIndices(gridcell = veg_pp%gridcell(p), &
+                                                        topounit = veg_pp%topounit(p), &
+                                                        landunit = veg_pp%landunit(p), &
+                                                        column = veg_pp%column(p), &
+                                                        bareground = is_bareground)
+
+      ! Register and initialize the boundary condition variables
+      ! Global variables
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_decomp, &
+                                               data=nlevdecomp, hlm_flag=.true.)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_decomp_max, &
+                                               data=nlevdecomp_full, hlm_flag=.true.)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_decomp_thickness, &
+                                               data=dzsoi_decomp, hlm_flag=.true.)
+ 
+      !! Column level variables
+      ! Get the column index
+      c = this%fates(nc)%registry(r)%GetColumnIndex()
+
+      ! Determine if this is the first register on the column
+      is_first = .false.
+      if (is_bareground) then
+         is_first = .true.
+      end if
+
+      ! Variables that do not need to accumulate
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_soil_level, &
+                                               data=col_pp%nlevbed(c), hlm_flag=.true., &
+                                               subgrid_type=registry_var_intid_column)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_decomp_frac_moisture, &
+                                               data=col_cf%w_scalar(c,:), hlm_flag=.true., &
+                                               subgrid_type=registry_var_intid_column)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_decomp_frac_temperature, &
+                                               data=col_cf%t_scalar(c,:), hlm_flag=.true., &
+                                               subgrid_type=registry_var_intid_column)
+
+      ! Variables that need to accumulate                                               
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_carbon_cellulose, &
+                                               data=col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_cel_lit), &
+                                               hlm_flag=.true., accumulate=.true., &
+                                               subgrid_type=registry_var_intid_column)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_carbon_lignin, &
+                                               data=col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_lig_lit), &
+                                               hlm_flag=.true., accumulate=.true., &
+                                               subgrid_type=registry_var_intid_column)
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_carbon_labile, &
+                                               data=col_cf%decomp_cpools_sourcesink(c,1:nlevdecomp,i_met_lit), &
+                                               hlm_flag=.true., accumulate=.true., &
+                                               subgrid_type=registry_var_intid_column)
+
+      ! Pass is_first option to assure HLM updates are zero'd 
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_carbon_total, &
+                                               data=col_cf%litfall(c), &
+                                               hlm_flag=.true., accumulate=.true., is_first=is_first, &
+                                               subgrid_type=registry_var_intid_column)
+
+      ! Register nitrogen and phosphorus litter fluxes if necessary
+      if (fates_parteh_mode == prt_cnp_flex_allom_hyp) then
+         ! Phosphorus
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_phosphorus_cellulose, &
+                                                  data=col_pf%decomp_ppools_sourcesink(c,:,i_cel_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_phosphorus_lignin, &
+                                                  data=col_pf%decomp_ppools_sourcesink(c,:,i_lig_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_phosphorus_labile, &
+                                                  data=col_pf%decomp_ppools_sourcesink(c,:,i_met_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+
+         ! Pass is_first option to assure HLM updates are zero'd
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_phosphorus_total, &
+                                                  data=col_pf%plant_to_litter_pflux(c), &
+                                                  hlm_flag=.true., accumulate=.true., is_first=is_first, &
+                                                  subgrid_type=registry_var_intid_column)
+
+         ! Nitrogen
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_nitrogen_cellulose, &
+                                                  data=col_nf%decomp_npools_sourcesink(c,:,i_cel_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_nitrogen_lignin, &
+                                                  data=col_nf%decomp_npools_sourcesink(c,:,i_lig_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_nitrogen_labile, &
+                                                  data=col_nf%decomp_npools_sourcesink(c,:,i_met_lit), &
+                                                  hlm_flag=.true., accumulate=.true., &
+                                                  subgrid_type=registry_var_intid_column)
+
+         ! Pass is_first option to assure HLM updates are zero'd
+         call this%fates(nc)%registry(r)%Register(key=hlm_fates_litter_nitrogen_total, &
+                                                  data=col_nf%plant_to_litter_nflux(c), &
+                                                  hlm_flag=.true., accumulate=.true., is_first=is_first, &
+                                                  subgrid_type=registry_var_intid_column)
+      end if
+   end do
+
+end subroutine RegisterInterfaceVariablesInit
+
+! ======================================================================================
+
+subroutine RegisterInterfaceVariablesColdStart(this, nc, canopystate_inst)
+
+   use FatesInterfaceParametersMod, only : hlm_fates_thaw_max_depth_index
+
+   class(hlm_fates_interface_type), intent(inout) :: this
+   integer, intent(in)                            :: nc              
+   type(canopystate_type), intent(inout)          :: canopystate_inst
+
+   ! Locals
+   integer :: r   ! register index
+   integer :: c   ! column index
+
+   ! Iterate over the number of vegetated patches
+   do r = 1, this%fates(nc)%npatches
+
+      ! Column variables
+      c = this%fates(nc)%registry(r)%GetColumnIndex()
+
+      call this%fates(nc)%registry(r)%Register(key=hlm_fates_thaw_max_depth_index, &
+                                               data=canopystate_inst%altmax_lastyear_indx_col(c), hlm_flag=.true.)
+   end do
+
+end subroutine RegisterInterfaceVariablesColdStart
 
 end module ELMFatesInterfaceMod
